@@ -82,7 +82,6 @@ library
     , colourista
     , containers
     , cvss
-    , directory
     , filepath
     , fused-effects
     , hsec-core

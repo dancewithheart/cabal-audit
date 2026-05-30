@@ -24,7 +24,7 @@ import Data.Coerce (coerce)
 import Data.Foldable (fold, for_)
 import Data.Functor ((<&>))
 import Data.Functor.Identity (Identity (runIdentity))
-import Data.List (nubBy, nub)
+import Data.List (nub, nubBy)
 import Data.Map qualified as M
 import Data.SARIF as Sarif
 import Data.String (IsString (fromString))
@@ -61,7 +61,7 @@ import Security.Advisories.Convert.OSV qualified as OSV
 import Security.Advisories.Filesystem (listAdvisories)
 import Security.Advisories.SBom.Types (prettyVersion)
 import Security.Advisories.Sync qualified as Sync
-import qualified Security.CVSS as CVSS
+import Security.CVSS qualified as CVSS
 import System.Exit (exitFailure)
 import System.IO (Handle, IOMode (WriteMode), stdout, withFile)
 import UnliftIO (MonadIO (..), MonadUnliftIO (..), catch, throwIO, withSystemTempDirectory)
@@ -322,12 +322,16 @@ ruleForAdvisory advisory =
             { rcLevel = Just Sarif.Error
             }
     , rdProperties =
-        M.fromList
-          [
-            ( "tags"
-            , Aeson.toJSON (ruleTags advisory)
-            )
+        M.fromList $
+          [ ("tags", Aeson.toJSON (ruleTags advisory))
           ]
+            <> maybe
+              []
+              ( \severity ->
+                  [ ("security-severity", Aeson.toJSON severity)
+                  ]
+              )
+              (advisorySecuritySeverity advisory)
     }
  where
   ruleId = T.pack (printHsecId advisory.advisoryId)
@@ -345,7 +349,6 @@ ruleTags advisory =
     ]
       <> cveTags
       <> cweTags
-      <> cvssTags
  where
   ruleId = T.pack (printHsecId advisory.advisoryId)
 
@@ -360,18 +363,17 @@ ruleTags advisory =
     | cwe <- advisory.advisoryCWEs
     ]
 
-  cvssTags =
-    concatMap affectedCvssTags advisory.advisoryAffected
-
-affectedCvssTags :: Affected -> [Text]
-affectedCvssTags affected =
-  [ T.pack "external/cvss/vector/" <> CVSS.cvssVectorString cvss
-  , T.pack "external/cvss/score/" <> T.pack (show score)
-  , T.pack "external/cvss/rating/" <> T.toLower (T.pack (show rating))
-  ]
+advisorySecuritySeverity :: Advisory -> Maybe Text
+advisorySecuritySeverity advisory =
+  case scores of
+    [] -> Nothing
+    _ -> Just $ T.pack $ show $ maximum scores
  where
-  cvss = affectedCVSS affected
-  (rating, score) = CVSS.cvssScore cvss
+  scores =
+    [ score
+    | affected <- advisory.advisoryAffected
+    , let (_, score) = CVSS.cvssScore (affectedCVSS affected)
+    ]
 
 data Segment = Segment
   { sConsoleColors :: [Text]
