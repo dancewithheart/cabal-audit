@@ -24,10 +24,9 @@ import Data.Coerce (coerce)
 import Data.Foldable (fold, for_)
 import Data.Functor ((<&>))
 import Data.Functor.Identity (Identity (runIdentity))
-import Data.List (nubBy)
+import Data.List (nubBy, nub)
 import Data.Map qualified as M
 import Data.SARIF as Sarif
-import Data.Set qualified as S
 import Data.String (IsString (fromString))
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -51,7 +50,7 @@ import Distribution.Verbosity qualified as Verbosity
 import Distribution.Version (Version)
 import GHC.Generics (Generic)
 import Options.Applicative
-import Security.Advisories (Advisory (..), CWE (..), Keyword (..), ParseAdvisoryError (..), ghcComponentToText, printHsecId)
+import Security.Advisories (Advisory (..), Affected (..), CWE (..), Keyword (..), ParseAdvisoryError (..), ghcComponentToText, printHsecId)
 import Security.Advisories.Cabal
   ( AuditedComponent (..)
   , ElaboratedPackageInfoAdvised
@@ -62,6 +61,7 @@ import Security.Advisories.Convert.OSV qualified as OSV
 import Security.Advisories.Filesystem (listAdvisories)
 import Security.Advisories.SBom.Types (prettyVersion)
 import Security.Advisories.Sync qualified as Sync
+import qualified Security.CVSS as CVSS
 import System.Exit (exitFailure)
 import System.IO (Handle, IOMode (WriteMode), stdout, withFile)
 import UnliftIO (MonadIO (..), MonadUnliftIO (..), catch, throwIO, withSystemTempDirectory)
@@ -339,25 +339,39 @@ ruleForAdvisory advisory =
 
 ruleTags :: Advisory -> [Text]
 ruleTags advisory =
-  S.toList . S.fromList $
-    [ "security"
-    , "external/hsec/" <> ruleId
+  nub $
+    [ T.pack "security"
+    , T.pack "external/hsec/" <> ruleId
     ]
       <> cveTags
       <> cweTags
+      <> cvssTags
  where
   ruleId = T.pack (printHsecId advisory.advisoryId)
 
   cveTags =
     [ T.pack "external/cve/" <> T.toLower alias
     | alias <- advisory.advisoryAliases
-    , "CVE-" `T.isPrefixOf` T.toUpper alias
+    , T.pack "CVE-" `T.isPrefixOf` T.toUpper alias
     ]
 
   cweTags =
-    [ "external/cwe/CWE-" <> T.pack (show cwe)
-    | CWE {unCWE = cwe} <- advisory.advisoryCWEs
+    [ T.pack "external/cwe/cwe-" <> T.pack (show (unCWE cwe))
+    | cwe <- advisory.advisoryCWEs
     ]
+
+  cvssTags =
+    concatMap affectedCvssTags advisory.advisoryAffected
+
+affectedCvssTags :: Affected -> [Text]
+affectedCvssTags affected =
+  [ T.pack "external/cvss/vector/" <> CVSS.cvssVectorString cvss
+  , T.pack "external/cvss/score/" <> T.pack (show score)
+  , T.pack "external/cvss/rating/" <> T.toLower (T.pack (show rating))
+  ]
+ where
+  cvss = affectedCVSS affected
+  (rating, score) = CVSS.cvssScore cvss
 
 data Segment = Segment
   { sConsoleColors :: [Text]

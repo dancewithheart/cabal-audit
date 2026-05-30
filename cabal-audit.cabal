@@ -81,6 +81,7 @@ library
     , chronos
     , colourista
     , containers
+    , cvss
     , directory
     , filepath
     , fused-effects
