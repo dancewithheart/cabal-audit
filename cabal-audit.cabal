@@ -79,7 +79,6 @@ library
     , bytestring
     , Cabal
     , cabal-install
-    , chronos
     , colourista
     , containers
     , filepath
@@ -96,6 +95,7 @@ library
     , sarif
     , temporary
     , text
+    , time
     , transformers
     , unliftio
     , uuid
@@ -123,8 +123,14 @@ test-suite spec
   main-is:          Main.hs
   other-modules:    Spec
   build-depends:
-    , base         <5
+    , aeson
+    , base          <5
+    , bytestring
     , cabal-audit
+    , Cabal-syntax
     , hspec
+    , time
+    , uuid
+    , vector
 
   default-language: Haskell2010

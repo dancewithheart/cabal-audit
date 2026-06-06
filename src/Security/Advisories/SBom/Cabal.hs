@@ -1,5 +1,6 @@
 module Security.Advisories.SBom.Cabal (planToSBom) where
 
+import Data.List.NonEmpty qualified as NE
 import Data.Map qualified as M
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -14,28 +15,25 @@ import Distribution.SPDX qualified as SPDX
 import Distribution.Utils.ShortText qualified as ST
 import Security.Advisories.SBom.Types
 
-planToSBom :: ElaboratedInstallPlan -> (SBomMeta, V.Vector SBomMeta)
-planToSBom plan = (rootSBom, allSBoms)
+planToSBom :: ElaboratedInstallPlan -> Maybe (SBomMeta, V.Vector SBomMeta)
+planToSBom plan = do
+  pkgs <- NE.nonEmpty allPkgs
+  let localPkgs = filter isLocal (NE.toList pkgs)
+      rootPkg = case localPkgs of
+        (p : _) -> p
+        [] -> NE.head pkgs
+      rootSBom = toSBom rootPkg
+      allSBoms = V.fromList [toSBom p | p <- NE.toList pkgs, getPkgId p /= getPkgId rootPkg]
+  pure (rootSBom, allSBoms)
  where
   allPkgs = Plan.toList plan
   pkgMap = M.fromList [(getPkgId p, p) | p <- allPkgs]
 
   getPkgId = Plan.foldPlanPackage IPI.installedUnitId (.elabUnitId)
 
-  -- For now, let's take the first package as root, or try to find a local one
-  -- A better way would be to identify targets
   isLocal p = case p of
     Plan.Configured ecp -> ecp.elabLocalToProject
     _ -> False
-
-  rootPkg = case filter isLocal allPkgs of
-    (p : _) -> p
-    [] -> case allPkgs of
-      (p : _) -> p
-      [] -> error "No packages found in install plan"
-
-  rootSBom = toSBom rootPkg
-  allSBoms = V.fromList [toSBom p | p <- allPkgs, getPkgId p /= getPkgId rootPkg]
 
   toSBom pkg =
     let info = extractInfo pkg
@@ -96,4 +94,4 @@ data Info = Info
 -- IPI.license returns Either SPDX.License Distribution.License.License
 extractLicense :: Either SPDX.License DL.License -> SPDX.License
 extractLicense (Left l) = l
-extractLicense (Right _) = SPDX.NONE
+extractLicense (Right dl) = DL.licenseToSPDX dl

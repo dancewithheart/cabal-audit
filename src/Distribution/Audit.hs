@@ -10,7 +10,6 @@
 --    otherwise formatted output
 module Distribution.Audit (auditMain, buildAdvisories, AuditConfig (..), AuditException (..)) where
 
-import Chronos qualified
 import Colourista.Pure (blue, bold, formatWith, green, red, yellow)
 import Control.Algebra (Has)
 import Control.Carrier.Lift (runM)
@@ -30,6 +29,7 @@ import Data.SARIF as Sarif
 import Data.String (IsString (fromString))
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Time (getCurrentTime)
 import Data.UUID.V4 qualified as UUID
 import Data.Vector (Vector)
 import Data.Vector qualified as V
@@ -130,6 +130,12 @@ data AuditConfig = MkAuditConfig
   -- ^ whether to exit with a non-success code when advisories are found
   }
 
+data AuditResult = MkAuditResult
+  { auditResult'advisories :: M.Map AuditedComponent ElaboratedPackageInfoAdvised
+  , auditResult'plan :: ElaboratedInstallPlan
+  , auditResult'context :: ProjectBaseContext
+  }
+
 -- | the main action to invoke
 auditMain :: IO ()
 auditMain = do
@@ -146,9 +152,9 @@ auditMain = do
   runM $ interpPretty do
     advisories <-
       ( do
-          (advisories, plan, projectBaseContext) <- buildAdvisories auditConfig nixStyleFlags
-          handleBuiltAdvisories advisories plan projectBaseContext (outputHandle auditConfig) (outputFormat auditConfig)
-          pure advisories
+          result <- buildAdvisories auditConfig nixStyleFlags
+          handleBuiltAdvisories result (outputHandle auditConfig) (outputFormat auditConfig)
+          pure result.auditResult'advisories
       )
         `catch` \(SomeException ex) -> do
           owo
@@ -165,7 +171,7 @@ buildAdvisories
   :: (MonadUnliftIO m, Has (Pretty [Text]) sig m)
   => AuditConfig
   -> NixStyleFlags ()
-  -> m (M.Map AuditedComponent ElaboratedPackageInfoAdvised, ElaboratedInstallPlan, ProjectBaseContext)
+  -> m AuditResult
 buildAdvisories MkAuditConfig {advisoriesPathOrURL, verbosity} flags = do
   let cliConfig = projectConfigFromFlags flags
 
@@ -201,38 +207,43 @@ buildAdvisories MkAuditConfig {advisoriesPathOrURL, verbosity} flags = do
           Left e -> throwIO $ AdvisoriesFetchingError e
           Right _ -> k tmp
 
-  pure (matchAdvisoriesForPlan plan ghcVersion advisories, plan, projectBaseContext)
+  pure
+    MkAuditResult
+      { auditResult'advisories = matchAdvisoriesForPlan plan ghcVersion advisories
+      , auditResult'plan = plan
+      , auditResult'context = projectBaseContext
+      }
 
 -- | provides the built advisories in some consumable form, e.g. as human readable form
 --
 -- FUTUREWORK(mangoiv): provide output as JSON
 handleBuiltAdvisories
   :: (MonadUnliftIO m, Has (Pretty [Text]) sig m)
-  => M.Map AuditedComponent ElaboratedPackageInfoAdvised
-  -> ElaboratedInstallPlan
-  -> ProjectBaseContext
+  => AuditResult
   -> Codensity IO Handle
   -> OutputFormat
   -> m ()
-handleBuiltAdvisories mp plan pbc mkHandle = \case
-  HumanReadable -> humanReadableHandler mkHandle $ M.toList mp
-  Osv -> osvHandler mkHandle mp
-  Sarif -> sarifHandler mkHandle pbc $ M.toList mp
-  SbomCycloneDX -> cyclonedxHandler mkHandle plan
+handleBuiltAdvisories MkAuditResult {auditResult'advisories, auditResult'plan, auditResult'context} mkHandle = \case
+  HumanReadable -> humanReadableHandler mkHandle $ M.toList auditResult'advisories
+  Osv -> osvHandler mkHandle auditResult'advisories
+  Sarif -> sarifHandler mkHandle auditResult'context $ M.toList auditResult'advisories
+  SbomCycloneDX -> cyclonedxHandler mkHandle auditResult'plan
 
-cyclonedxHandler :: MonadUnliftIO m => Codensity IO Handle -> ElaboratedInstallPlan -> m ()
+cyclonedxHandler :: (MonadUnliftIO m, Has (Pretty [Text]) sig m) => Codensity IO Handle -> ElaboratedInstallPlan -> m ()
 cyclonedxHandler mkHandle plan = do
   uuid <- liftIO UUID.nextRandom
-  time <- liftIO (Chronos.timeToDatetime <$> Chronos.now)
-  let (root, allComponents) = planToSBom plan
-      cdxInfo =
-        MkCycloneDXInfo
-          { cyclonedx'sbomVersion = 1
-          , cyclonedx'freshUUID = uuid
-          , cyclonedx'currentTime = time
-          }
-  withRunCodensityInIO mkHandle \hdl ->
-    liftIO . BSL.hPutStr hdl . Aeson.encode $ serializeToCycloneDX cdxInfo root allComponents
+  time <- liftIO getCurrentTime
+  case planToSBom plan of
+    Nothing -> owo [([red], "No packages found in install plan")]
+    Just (root, allComponents) -> do
+      let cdxInfo =
+            MkCycloneDXInfo
+              { cyclonedx'sbomVersion = 1
+              , cyclonedx'freshUUID = uuid
+              , cyclonedx'currentTime = time
+              }
+      withRunCodensityInIO mkHandle \hdl ->
+        liftIO . BSL.hPutStr hdl . Aeson.encode $ serializeToCycloneDX cdxInfo root allComponents
 
 osvHandler :: MonadUnliftIO m => Codensity IO Handle -> M.Map AuditedComponent ElaboratedPackageInfoAdvised -> m ()
 osvHandler mkHandle mp =
@@ -496,7 +507,7 @@ auditCommandParser =
                 <|> flag'
                   SbomCycloneDX
                   ( mconcat
-                      [ long "sbom:cyclonedx"
+                      [ long "cyclonedx"
                       , help "produce a CycloneDX SBOM"
                       ]
                   )

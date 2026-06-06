@@ -1,8 +1,8 @@
 module Security.Advisories.SBom.CycloneDX where
 
-import Chronos (Datetime, encodeIso8601)
 import Data.Aeson
 import Data.Text qualified as T
+import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Data.Vector qualified as V
@@ -15,7 +15,7 @@ data CycloneDXInfo = MkCycloneDXInfo
   -- ^ the generation of the sbom, this should be the generation of the last generated sbom + 1
   , cyclonedx'freshUUID :: UUID.UUID
   -- ^ the uri of the new cyclone dx SBom
-  , cyclonedx'currentTime :: Datetime
+  , cyclonedx'currentTime :: UTCTime
   -- ^ the uri of the new cyclone dx SBom
   }
 
@@ -29,7 +29,7 @@ serializeToCycloneDX info root components =
     , "version" .= Number (fromIntegral info.cyclonedx'sbomVersion)
     , "metadata"
         .= object
-          [ "timestamp" .= String (encodeIso8601 info.cyclonedx'currentTime)
+          [ "timestamp" .= String (T.pack $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" info.cyclonedx'currentTime)
           , "component" .= serializeComponent root
           ]
     , "components" .= Array (V.map serializeComponent components)
