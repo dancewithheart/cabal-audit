@@ -5,7 +5,7 @@
   bytestring,
   Cabal,
   cabal-install,
-  chronos,
+  Cabal-syntax,
   colourista,
   containers,
   cvss,
@@ -21,9 +21,11 @@
   optparse-applicative,
   pretty,
   process,
+  purl,
   sarif,
   temporary,
   text,
+  time,
   transformers,
   unliftio,
   uuid,
@@ -42,7 +44,6 @@ mkDerivation {
     bytestring
     Cabal
     cabal-install
-    chronos
     colourista
     containers
     cvss
@@ -56,9 +57,11 @@ mkDerivation {
     optparse-applicative
     pretty
     process
+    purl
     sarif
     temporary
     text
+    time
     transformers
     unliftio
     uuid
@@ -66,7 +69,16 @@ mkDerivation {
     vector
   ];
   executableHaskellDepends = [base];
-  testHaskellDepends = [base hspec];
+  testHaskellDepends = [
+    aeson
+    base
+    bytestring
+    Cabal-syntax
+    hspec
+    time
+    uuid
+    vector
+  ];
   description = "Checking a cabal project for security advisories";
   license = lib.licenses.bsd3;
   mainProgram = "cabal-audit";
