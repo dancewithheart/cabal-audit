@@ -24,7 +24,8 @@ import Data.Coerce (coerce)
 import Data.Foldable (fold, for_)
 import Data.Functor ((<&>))
 import Data.Functor.Identity (Identity (runIdentity))
-import Data.List (nub, nubBy)
+import Data.List (nub)
+import Data.List.NonEmpty qualified as NE
 import Data.Map qualified as M
 import Data.SARIF as Sarif
 import Data.String (IsString (fromString))
@@ -273,9 +274,7 @@ sarifHandler mkHandle projectBaseContext packageAdvisories = do
             packageAdvisories >>= \(pkgName, pkgInfo) ->
               runIdentity pkgInfo.packageAdvisories <&> \(advisory, fixedAt) ->
                 (advisory.advisoryId, (advisory, [(renderAuditedComponent pkgName, fixedAt)]))
-  let rules =
-        nubBy (\a b -> rdId a == rdId b) $
-          map (ruleForAdvisory . fst) advisories
+  let rules = ruleForAdvisory . fst <$> advisories
       run =
         MkRun
           { runTool =
@@ -296,7 +295,7 @@ sarifHandler mkHandle projectBaseContext packageAdvisories = do
           , runResults =
               advisories <&> \(advisory, concernedInfo) ->
                 MkResult
-                  { resultRuleId = T.pack $ printHsecId advisory.advisoryId
+                  { resultRuleId = advisoryRuleId advisory
                   , resultMessage =
                       MkMultiformatMessageString
                         { mmsText = fold $ prettyAdvisory advisory $ prettyTextSummary $ fst <$> concernedInfo
@@ -324,28 +323,44 @@ sarifHandler mkHandle projectBaseContext packageAdvisories = do
   withRunCodensityInIO mkHandle \hdl ->
     liftIO . BSL.hPutStr hdl . Aeson.encode $ defaultLog {logRuns = [run]}
 
+advisoryRuleId :: Advisory -> Text
+advisoryRuleId advisory =
+  T.pack (printHsecId advisory.advisoryId)
+
 advisoryUrl :: Advisory -> Text
 advisoryUrl advisory =
   "https://haskell.github.io/security-advisories/advisory/"
-    <> T.pack (printHsecId advisory.advisoryId)
+    <> advisoryRuleId advisory
+
+-- | GitHub Code Scanning supports rule descriptions of at most 1024
+-- characters.
+githubRuleDescription :: Text -> Text
+githubRuleDescription = T.take 1024
+
+-- | GitHub Code Scanning rejects SARIF containing more than 20 tags
+-- for a single rule.
+githubRuleTags :: [Text] -> [Text]
+githubRuleTags = take 20 . nub
 
 ruleForAdvisory :: Advisory -> ReportingDescriptor
 ruleForAdvisory advisory =
   (defaultReportingDescriptor ruleId)
     { rdName = Just ruleId
     , rdShortDescription =
-        Just $
+        Just
           MkMultiformatMessageString
-            { mmsText = advisory.advisorySummary
+            { mmsText =
+                githubRuleDescription advisory.advisorySummary
             , mmsMarkdown = Nothing
             }
     , rdFullDescription =
-        Just $
+        Just
           MkMultiformatMessageString
             { mmsText =
-                "Haskell Security Advisory: "
-                  <> advisory.advisorySummary
-                  <> keywordsSuffix
+                githubRuleDescription $
+                  "Haskell Security Advisory: "
+                    <> advisory.advisorySummary
+                    <> keywordsSuffix
             , mmsMarkdown = Nothing
             }
     , rdHelpUri = Just (advisoryUrl advisory)
@@ -355,19 +370,13 @@ ruleForAdvisory advisory =
             { rcLevel = Just Sarif.Error
             }
     , rdProperties =
-        M.fromList $
-          [ ("tags", Aeson.toJSON (ruleTags advisory))
-          ]
-            <> maybe
-              []
-              ( \severity ->
-                  [ ("security-severity", Aeson.toJSON severity)
-                  ]
-              )
-              (advisorySecuritySeverity advisory)
+        M.singleton "tags" (Aeson.toJSON (ruleTags advisory))
+          <> foldMap
+            (M.singleton "security-severity" . Aeson.toJSON)
+            (advisorySecuritySeverity advisory)
     }
  where
-  ruleId = T.pack (printHsecId advisory.advisoryId)
+  ruleId = advisoryRuleId advisory
   keywords = T.intercalate ", " (coerce advisory.advisoryKeywords)
   keywordsSuffix =
     if T.null keywords
@@ -376,32 +385,29 @@ ruleForAdvisory advisory =
 
 ruleTags :: Advisory -> [Text]
 ruleTags advisory =
-  nub $
-    [ T.pack "security"
-    , T.pack "external/hsec/" <> ruleId
+  githubRuleTags $
+    [ "security"
+    , "external/hsec/" <> advisoryRuleId advisory
     ]
       <> cveTags
       <> cweTags
  where
-  ruleId = T.pack (printHsecId advisory.advisoryId)
-
   cveTags =
-    [ T.pack "external/cve/" <> T.toLower alias
+    [ "external/cve/" <> T.toLower alias
     | alias <- advisory.advisoryAliases
-    , T.pack "CVE-" `T.isPrefixOf` T.toUpper alias
+    , "CVE-" `T.isPrefixOf` T.toUpper alias
     ]
 
   cweTags =
-    [ T.pack "external/cwe/cwe-" <> T.pack (show (unCWE cwe))
+    [ "external/cwe/cwe-" <> T.pack (show (unCWE cwe))
     | cwe <- advisory.advisoryCWEs
     ]
 
 advisorySecuritySeverity :: Advisory -> Maybe Text
 advisorySecuritySeverity advisory =
-  case scores of
-    [] -> Nothing
-    _ -> Just $ T.pack $ show $ maximum scores
+  T.pack . show . maximum <$> NE.nonEmpty positiveScores
  where
+  positiveScores = filter (> 0) scores
   scores =
     [ score
     | affected <- advisory.advisoryAffected
