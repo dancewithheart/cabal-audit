@@ -61,6 +61,7 @@ import Security.Advisories.Cabal
   , matchAdvisoriesForPlan
   )
 import Security.Advisories.Convert.OSV qualified as OSV
+import Security.Advisories.Core.OsvId (printOsvId)
 import Security.Advisories.Filesystem (listAdvisories)
 import Security.Advisories.SBom.Cabal (planToSBom)
 import Security.Advisories.SBom.CycloneDX (CycloneDXInfo (..), serializeToCycloneDX)
@@ -394,14 +395,12 @@ ruleTags advisory =
  where
   cveTags =
     [ "external/cve/" <> T.toLower alias
-    | alias <- advisory.advisoryAliases
+    | osvId <- advisory.advisoryAliases
+    , let alias = printOsvId osvId
     , "CVE-" `T.isPrefixOf` T.toUpper alias
     ]
 
-  cweTags =
-    [ "external/cwe/cwe-" <> T.pack (show (unCWE cwe))
-    | cwe <- advisory.advisoryCWEs
-    ]
+  cweTags = ["external/cwe/cwe-" <> T.pack (show (unCWE cwe)) | cwe <- advisory.advisoryCWEs]
 
 advisorySecuritySeverity :: Advisory -> Maybe Text
 advisorySecuritySeverity advisory =
